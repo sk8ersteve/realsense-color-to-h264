@@ -1,5 +1,5 @@
 /*
- * Realsense D400 infrared stream to H.264 with VAAPI encoding
+ * Realsense D435 color stream to HEVC with VAAPI encoding
  *
  * Copyright 2019 (C) Bartosz Meglicki <meglickib@gmail.com>
  *
@@ -7,12 +7,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
+ * Modified by Stephen Thomas-Dorin <stephen.thomasdorin@gmail.com>
+ *
  */
 
 /* This program is example how to use:
  * - VAAPI to hardware encode
- * - Realsense D400 greyscale infrared stream
- * - to H.264 raw video
+ * - Realsense D435 color stream
+ * - to HEVC raw video
  * - stored to disk as example
  *
  * See README.md for the details
@@ -36,6 +38,7 @@ struct input_args
 	int height;
 	int framerate;
 	int seconds;
+	char* filename;
 };
 
 bool main_loop(const input_args& input, rs2::pipeline& realsense, hve *avctx, ofstream& out_file);
@@ -49,11 +52,12 @@ int main(int argc, char* argv[])
 	struct hve_config hardware_config = {0};
 	struct input_args user_input = {0};
 
-	ofstream out_file("output.h264", ofstream::binary);
-	rs2::pipeline realsense;
-
 	if(process_user_input(argc, argv, &user_input, &hardware_config) < 0)
 		return 1;
+
+	ofstream out_file(user_input.filename, ofstream::binary);
+	rs2::pipeline realsense;
+	rs2::context ctx;
 
 	if(!out_file)
 		return 2;
@@ -72,7 +76,7 @@ int main(int argc, char* argv[])
 	if(status)
 	{
 		cout << "Finished successfully." << endl;
-		cout << "Test with: " << endl << endl << "ffplay output.h264" << endl;
+		cout << "Saved to: " << endl << endl << user_input.filename << endl;
 	}
 
 	return 0;
@@ -84,28 +88,33 @@ bool main_loop(const input_args& input, rs2::pipeline& realsense, hve *he, ofstr
 	const int frames = input.seconds * input.framerate;
 	int f, failed;
 	hve_frame frame = {0};
-	uint8_t *color_data = NULL; //data of dummy color plane for NV12
+	uint8_t *color_data = NULL; //keep to use later for depth
 	AVPacket *packet;
-	
+
+    // Capture 30 frames to give autoexposure, etc. a chance to settle
+    for (auto i = 0; i < 10; ++i) realsense.wait_for_frames();
+
 	for(f = 0; f < frames; ++f)
 	{
 		rs2::frameset frameset = realsense.wait_for_frames();
-		rs2::video_frame ir_frame = frameset.get_infrared_frame(1);
+		rs2::video_frame c_frame = frameset.get_color_frame();
 
-		if(!color_data)
-		{   //prepare dummy color plane for NV12 format, half the size of Y
-			//we can't alloc it in advance, this is the first time we know realsense stride
-			int size = ir_frame.get_stride_in_bytes()*ir_frame.get_height()/2;
-			color_data = new uint8_t[size];
-			memset(color_data, 128, size);
-		}
+		// commented out for yuyv format (one plane) color stream
+		// if(!color_data)
+		// {   //prepare dummy color plane for NV12 format, half the size of Y
+		// 	//we can't alloc it in advance, this is the first time we know realsense stride
+		// 	int size = c_frame.get_stride_in_bytes()*c_frame.get_height()/2;
+		// 	color_data = new uint8_t[size];
+		// 	memset(color_data, 128, size);
+		// }
 		
 		//supply realsense frame data as ffmpeg frame data
-		frame.linesize[0] = frame.linesize[1] =  ir_frame.get_stride_in_bytes();
-		frame.data[0] = (uint8_t*) ir_frame.get_data();
-		frame.data[1] = color_data;
+		frame.linesize[0] = c_frame.get_stride_in_bytes();
+		// frame.linesize[1] = c_frame.get_stride_in_bytes();
+		frame.data[0] = (uint8_t*) c_frame.get_data();
+		// frame.data[1] = color_data;
 
-		dump_frame_info(ir_frame);
+		dump_frame_info(c_frame);
 
 		if(hve_send_frame(he, &frame) != HVE_OK)
 		{
@@ -136,7 +145,7 @@ bool main_loop(const input_args& input, rs2::pipeline& realsense, hve *he, ofstr
 	}
 	cout << endl;
 		
-	delete [] color_data;
+	// delete [] color_data; // save for depth data
 
 	//all the requested frames processed?
 	return f==frames;
@@ -152,21 +161,19 @@ void dump_frame_info(rs2::video_frame &f)
 void init_realsense(rs2::pipeline& pipe, const input_args& input)
 {
 	rs2::config cfg;
-	// depth stream seems to be required for infrared to work
-	cfg.enable_stream(RS2_STREAM_DEPTH, input.width, input.height, RS2_FORMAT_Z16, input.framerate);
-	cfg.enable_stream(RS2_STREAM_INFRARED, 1, input.width, input.height, RS2_FORMAT_Y8, input.framerate);
+	cfg.enable_stream(RS2_STREAM_COLOR, 0, input.width, input.height, RS2_FORMAT_YUYV, input.framerate);
 
 	rs2::pipeline_profile profile = pipe.start(cfg);
 }
 
 int process_user_input(int argc, char* argv[], input_args* input, hve_config *config)
 {
-	if(argc < 5)
+	if(argc < 6)
 	{
-		cerr << "Usage: " << argv[0] << " <width> <height> <framerate> <seconds> [device]" << endl;
+		cerr << "Usage: " << argv[0] << " <width> <height> <framerate> <seconds> <file>" << endl;
 		cerr << endl << "examples: " << endl;
 		cerr << argv[0] << " 640 360 30 5" << endl;
-		cerr << argv[0] << " 640 360 30 5 /dev/dri/renderD128" << endl;
+		cerr << argv[0] << " 640 360 30 5 output.hevc" << endl;
 
 		return -1;
 	}
@@ -174,10 +181,11 @@ int process_user_input(int argc, char* argv[], input_args* input, hve_config *co
 	config->width = input->width = atoi(argv[1]);
 	config->height = input->height = atoi(argv[2]);
 	config->framerate = input->framerate = atoi(argv[3]);
+	config->pixel_format = "yuyv422";
 	
 	input->seconds = atoi(argv[4]);
 	
-	config->device = argv[5]; //NULL as last argv argument, or device path
+	input->filename = argv[5];
 	
 	return 0;
 }
