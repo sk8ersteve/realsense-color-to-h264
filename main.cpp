@@ -1,5 +1,5 @@
 /*
- * Realsense D435 color stream to HEVC with VAAPI encoding
+ * Realsense D435 color stream to H.264 with VAAPI encoding
  *
  * Copyright 2019 (C) Bartosz Meglicki <meglickib@gmail.com>
  *
@@ -14,7 +14,7 @@
 /* This program is example how to use:
  * - VAAPI to hardware encode
  * - Realsense D435 color stream
- * - to HEVC raw video
+ * - to H.264 raw video
  * - stored to disk as example
  *
  * See README.md for the details
@@ -173,7 +173,7 @@ int process_user_input(int argc, char* argv[], input_args* input, hve_config *co
 		cerr << "Usage: " << argv[0] << " <width> <height> <framerate> <seconds> <file>" << endl;
 		cerr << endl << "examples: " << endl;
 		cerr << argv[0] << " 640 360 30 5" << endl;
-		cerr << argv[0] << " 640 360 30 5 output.hevc" << endl;
+		cerr << argv[0] << " 640 360 30 5 output.h264" << endl;
 
 		return -1;
 	}
